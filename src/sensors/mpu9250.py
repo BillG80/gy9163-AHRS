@@ -1,39 +1,68 @@
 from smbus2 import SMBus
 import time
 from .constants import *
+import numpy as np
+from math import cos, sin
+from typing import Dict, Tuple
 
 class MPU9250:
     """MPU9250 9-axis motion sensor."""
     
-    def __init__(self):
-        """Initialize the MPU9250 sensor."""
-        self.bus = SMBus(I2C_BUS_1)
-        self.init_mpu9250()
-
-    def init_mpu9250(self):
-        """Initialize the sensor with specific settings."""
+    def __init__(self, bus: int, address: int = MPU9250_ADDR) -> None:
+        """Initialize MPU9250 sensor.
+        
+        Args:
+            bus: I2C bus number
+            address: I2C device address (default: 0x68)
+        """
         try:
-            # Check MPU9250 ID
-            who_am_i = self.bus.read_byte_data(MPU9250_ADDR, MPU9250_WHO_AM_I)
-            if who_am_i != 0x75:    # Maybe this chip is MPU6050
-                raise RuntimeError(f"MPU9250 WHO_AM_I returned 0x{who_am_i:02X} instead of 0x71")
-
-            # Wake up the MPU9250
-            self.bus.write_byte_data(MPU9250_ADDR, MPU9250_PWR_MGMT_1, 0x00)
-            time.sleep(0.1)
+            self.bus = SMBus(bus)
+            self.address = address
             
-            # Configure MPU9250
-            # Gyro config: ±250 degrees/second
-            self.bus.write_byte_data(MPU9250_ADDR, MPU9250_GYRO_CONFIG, 0x00)
-            # Accel config: ±2g
-            self.bus.write_byte_data(MPU9250_ADDR, MPU9250_ACCEL_CONFIG, 0x00)
-            # Set DLPF bandwidth to 41Hz
-            self.bus.write_byte_data(MPU9250_ADDR, MPU9250_CONFIG, 0x03)
-            
+            # Initialize sensor
+            self.reset()
+            time.sleep(0.1)  # Wait after reset
+            self.configure()
             print("MPU9250 initialized")
             
+            # Initialize orientation tracking
+            self.roll = 0.0   # Rotation around X axis
+            self.pitch = 0.0  # Rotation around Y axis
+            self.yaw = 0.0    # Rotation around Z axis
+            self.last_time = time.time()
+            
         except Exception as e:
-            raise RuntimeError(f"Failed to initialize MPU9250: {e}")
+            print(f"Failed to initialize MPU9250: {e}")
+            raise
+
+    def reset(self) -> None:
+        """Reset the MPU9250."""
+        try:
+            self.bus.write_byte_data(self.address, MPU9250_PWR_MGMT_1, 0x80)  # Reset all registers
+            time.sleep(0.1)
+            # Clear sleep mode and set clock source
+            self.bus.write_byte_data(self.address, MPU9250_PWR_MGMT_1, 0x01)
+            time.sleep(0.1)
+        except Exception as e:
+            print(f"Error resetting MPU9250: {e}")
+            raise
+
+    def configure(self) -> None:
+        """Configure MPU9250 settings."""
+        try:
+            # Configure gyroscope to ±500°/s
+            self.bus.write_byte_data(self.address, MPU9250_GYRO_CONFIG, 0x08)  # Gyro ±500°/s
+            # Configure accelerometer and other settings as needed
+            # self.bus.write_byte_data(self.address, MPU9250_ACCEL_CONFIG, 0x18)  # Example for Accel ±16g
+            # self.bus.write_byte_data(self.address, MPU9250_CONFIG, 0x03)  # DLPF 41Hz
+            
+            # Enable I2C bypass to access magnetometer
+            self.bus.write_byte_data(self.address, MPU9250_INT_PIN_CFG, 0x02)
+            time.sleep(0.1)
+            
+        except Exception as e:
+            print(f"Error configuring MPU9250: {e}")
+            raise
 
     def read_sensor_data(self):
         """
@@ -42,9 +71,9 @@ class MPU9250:
         """
         try:
             # Read accelerometer data
-            accel_data = self.bus.read_i2c_block_data(MPU9250_ADDR, MPU9250_ACCEL_XOUT_H, 6)
+            accel_data = self.bus.read_i2c_block_data(self.address, MPU9250_ACCEL_XOUT_H, 6)
             # Read gyroscope data
-            gyro_data = self.bus.read_i2c_block_data(MPU9250_ADDR, MPU9250_GYRO_XOUT_H, 6)
+            gyro_data = self.bus.read_i2c_block_data(self.address, MPU9250_GYRO_XOUT_H, 6)
 
             # Convert to signed values and scale
             accel = {
@@ -80,3 +109,89 @@ class MPU9250:
         if value >= 0x8000:
             value -= 0x10000
         return value
+
+    def get_rotation_matrix(self) -> np.ndarray:
+        """Calculate rotation matrix from Euler angles."""
+        # Create rotation matrices for each axis
+        cos_r, sin_r = cos(self.roll), sin(self.roll)
+        cos_p, sin_p = cos(self.pitch), sin(self.pitch)
+        cos_y, sin_y = cos(self.yaw), sin(self.yaw)
+        
+        # Rotation matrix around X axis (roll)
+        R_x = np.array([
+            [1, 0, 0],
+            [0, cos_r, -sin_r],
+            [0, sin_r, cos_r]
+        ])
+        
+        # Rotation matrix around Y axis (pitch)
+        R_y = np.array([
+            [cos_p, 0, sin_p],
+            [0, 1, 0],
+            [-sin_p, 0, cos_p]
+        ])
+        
+        # Rotation matrix around Z axis (yaw)
+        R_z = np.array([
+            [cos_y, -sin_y, 0],
+            [sin_y, cos_y, 0],
+            [0, 0, 1]
+        ])
+        
+        # Combined rotation matrix
+        R = R_z @ R_y @ R_x
+        return R
+
+    def update_orientation(self, gyro: Dict[str, float], dt: float) -> None:
+        """Update orientation based on gyroscope readings."""
+        # Convert gyroscope readings from degrees to radians
+        self.roll += np.radians(gyro['x']) * dt
+        self.pitch += np.radians(gyro['y']) * dt
+        self.yaw += np.radians(gyro['z']) * dt
+
+    def read_all(self) -> Dict[str, float]:
+        """Read all sensor data and return in world frame."""
+        try:
+            # Get raw sensor readings
+            accel, gyro = self.read_sensor_data()
+            
+            # Calculate time step
+            current_time = time.time()
+            dt = current_time - self.last_time
+            self.last_time = current_time
+            
+            # Update orientation using gyroscope data
+            self.update_orientation(gyro, dt)
+            
+            # Get rotation matrix
+            R = self.get_rotation_matrix()
+            
+            # Convert accelerometer readings to numpy array
+            accel_vector = np.array([accel['x'], accel['y'], accel['z']])
+            
+            # Rotate accelerometer readings to world frame
+            accel_world = R @ accel_vector
+            
+            # Convert gyroscope readings to numpy array
+            gyro_vector = np.array([gyro['x'], gyro['y'], gyro['z']])
+            
+            # Rotate gyroscope readings to world frame
+            gyro_world = R @ gyro_vector
+            
+            return {
+                'accel_x': accel_world[0],
+                'accel_y': accel_world[1],
+                'accel_z': accel_world[2],
+                'gyro_x': gyro_world[0],
+                'gyro_y': gyro_world[1],
+                'gyro_z': gyro_world[2],
+                'mag_x': 0,
+                'mag_y': 0,
+                'mag_z': 0,
+                'roll': np.degrees(self.roll),
+                'pitch': np.degrees(self.pitch),
+                'yaw': np.degrees(self.yaw)
+            }
+            
+        except Exception as e:
+            raise RuntimeError(f"Failed to read MPU9250 data: {e}")

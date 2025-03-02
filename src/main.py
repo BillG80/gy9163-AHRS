@@ -1,83 +1,64 @@
 import time
-from sensors.ms5611 import MS5611
 from sensors.bmp280 import BMP280
 from sensors.mpu9250 import MPU9250
+from processing.orientation import Orientation
+from displays.ssd1306 import SSD1306
 
-class SensorSystem:
-    """Main sensor system class."""
-    
-    def __init__(self):
-        """Initialize all sensors."""
-        print("Initializing sensor system...")
-        self.ms5611 = MS5611()
-        self.mpu9250 = MPU9250()
-        self.bmp280 = BMP280()
-        print("All sensors initialized")
-
-    def read_all_sensors(self):
-        """Read data from all sensors."""
-        try:
-            # Read MS5611
-            ms5611_temp, ms5611_press = self.ms5611.get_temperature_and_pressure()
-            
-            # Read BMP280
-            bmp280_temp, bmp280_press = self.bmp280.get_temperature_and_pressure()
-            
-            # Read MPU9250
-            accel, gyro = self.mpu9250.read_sensor_data()
-            
-            return {
-                'ms5611': {'temp': ms5611_temp, 'press': ms5611_press},
-                'bmp280': {'temp': bmp280_temp, 'press': bmp280_press},
-                'mpu9250': {'accel': accel, 'gyro': gyro}
-            }
-        except Exception as e:
-            raise RuntimeError(f"Error reading sensors: {e}")
+def initialize_sensors():
+    """Initialize all sensors and return their instances."""
+    bmp280 = BMP280(bus=1)
+    mpu9250 = MPU9250(bus=1)
+    orientation = Orientation()
+    display = SSD1306(bus=0)  # Using bus 0 for display
+    print("All sensors initialized")
+    return bmp280, mpu9250, orientation, display
 
 def main():
-    """Main program loop."""
+    # Initialize sensors, orientation, and display
+    bmp280, mpu9250, orientation, display = initialize_sensors()
+    
+    print("Waiting for sensors to stabilize...")
+    time.sleep(1)
+    
+    # Clear the display at start
+    display.clear_display()
+    
     try:
-        sensors = SensorSystem()
-        print("Waiting for sensors to stabilize...")
-        time.sleep(1)
-
         while True:
-            data = sensors.read_all_sensors()
+            start_time = time.time()
             
-            # Clear screen
-            print("\033[2J\033[H")
+            # Read sensor data
+            accel, gyro = mpu9250.read_sensor_data()
+            temperature, pressure = bmp280.get_temperature_and_pressure()
+            altitude = 44330 * (1.0 - pow(pressure / 1013.25, 0.1903))  # Calculate altitude using barometric formula
             
-            # Print MS5611 data
-            print("MS5611 (GY63):")
-            print(f"Temperature: {data['ms5611']['temp']:.2f}°C")
-            print(f"Pressure: {data['ms5611']['press']:.2f} hPa")
+            # Update orientation
+            current_time = time.time()
+            orientation.update_orientation(gyro, current_time)
             
-            # Print BMP280 data
-            print("\nBMP280 (GY91):")
-            print(f"Temperature: {data['bmp280']['temp']:.2f}°C")
-            print(f"Pressure: {data['bmp280']['press']:.2f} hPa")
+            # Calculate acceleration magnitude using dictionary keys
+            accel_magnitude = (accel['x']**2 + accel['y']**2 + accel['z']**2)**0.5
             
-            # Print MPU9250 data
-            print("\nMPU9250 (GY91):")
-            print("Accelerometer (g):")
-            print(f"  X: {data['mpu9250']['accel']['x']:+7.3f}")
-            print(f"  Y: {data['mpu9250']['accel']['y']:+7.3f}")
-            print(f"  Z: {data['mpu9250']['accel']['z']:+7.3f}")
+            # Update display with measurements
+            display.display_measurements(
+                pressure=pressure,
+                altitude=altitude,
+                temperature=temperature,
+                acceleration=accel_magnitude
+            )
             
-            print("\nGyroscope (degrees/s):")
-            print(f"  X: {data['mpu9250']['gyro']['x']:+8.2f}")
-            print(f"  Y: {data['mpu9250']['gyro']['y']:+8.2f}")
-            print(f"  Z: {data['mpu9250']['gyro']['z']:+8.2f}")
+            # Print orientation and magnitude
+            orientation.print_orientation_and_magnitude(accel)
             
-            print("\nPress Ctrl+C to exit")
-            print("-" * 40)
-            
-            time.sleep(0.1)  # 10Hz update rate
-            
+            # Calculate elapsed time and sleep to maintain 60 Hz
+            elapsed_time = time.time() - start_time
+            sleep_time = max(0, (1/60) - elapsed_time)
+            time.sleep(sleep_time)
     except KeyboardInterrupt:
         print("\nProgram terminated by user")
-    except Exception as e:
-        print(f"Error: {e}")
+    finally:
+        # Clear display before exiting
+        display.clear_display()
 
 if __name__ == "__main__":
     main()
