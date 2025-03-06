@@ -5,10 +5,31 @@ import numpy as np
 from math import cos, sin
 from typing import Dict, Tuple
 
+# MPU9250 Register Addresses
+MPU9250_DEFAULT_ADDRESS = 0x68
+MPU9250_ACCEL_XOUT_H = 0x3B
+MPU9250_GYRO_XOUT_H = 0x43
+MPU9250_PWR_MGMT_1 = 0x6B
+MPU9250_CONFIG = 0x1A
+MPU9250_GYRO_CONFIG = 0x1B
+MPU9250_ACCEL_CONFIG = 0x1C
+
+class EMAFilter:
+    def __init__(self, alpha=0.1):
+        self.alpha = alpha
+        self.value = None
+    
+    def update(self, measurement):
+        if self.value is None:
+            self.value = measurement
+        else:
+            self.value = self.alpha * measurement + (1 - self.alpha) * self.value
+        return self.value
+
 class MPU9250:
     """MPU9250 9-axis motion sensor."""
     
-    def __init__(self, bus: int, address: int = MPU9250_ADDR) -> None:
+    def __init__(self, bus: int, address: int = MPU9250_DEFAULT_ADDRESS) -> None:
         """Initialize MPU9250 sensor.
         
         Args:
@@ -22,14 +43,30 @@ class MPU9250:
             # Initialize sensor
             self.reset()
             time.sleep(0.1)  # Wait after reset
+            
+            # Read factory calibration
+            self.read_factory_calibration()
+            
             self.configure()
             print("MPU9250 initialized")
             
             # Initialize orientation tracking
-            self.roll = 0.0   # Rotation around X axis
-            self.pitch = 0.0  # Rotation around Y axis
-            self.yaw = 0.0    # Rotation around Z axis
+            self.roll = 0.0
+            self.pitch = 0.0
+            self.yaw = 0.0
             self.last_time = time.time()
+            
+            # Initialize EMA filters for raw readings
+            self.ema_accel = {
+                'x': EMAFilter(alpha=0.1),
+                'y': EMAFilter(alpha=0.1),
+                'z': EMAFilter(alpha=0.1)
+            }
+            self.ema_gyro = {
+                'x': EMAFilter(alpha=0.1),
+                'y': EMAFilter(alpha=0.1),
+                'z': EMAFilter(alpha=0.1)
+            }
             
         except Exception as e:
             print(f"Failed to initialize MPU9250: {e}")
@@ -64,51 +101,93 @@ class MPU9250:
             print(f"Error configuring MPU9250: {e}")
             raise
 
-    def read_sensor_data(self):
-        """
-        Read accelerometer and gyroscope data.
-        Returns: (accelerometer dict, gyroscope dict)
-        """
+    def read_factory_calibration(self) -> None:
+        """Read factory calibration data from MPU9250."""
         try:
-            # Read accelerometer data
+            # Read factory calibration data
+            self.accel_bias = {'x': 0.0, 'y': 0.0, 'z': 0.0}
+            self.gyro_bias = {'x': 0.0, 'y': 0.0, 'z': 0.0}
+            
+            # Read accelerometer factory trim values
+            xa_trim = self.bus.read_byte_data(self.address, MPU9250_XA_OFFSET_H)
+            ya_trim = self.bus.read_byte_data(self.address, MPU9250_YA_OFFSET_H)
+            za_trim = self.bus.read_byte_data(self.address, MPU9250_ZA_OFFSET_H)
+            
+            # Convert and store accelerometer biases
+            self.accel_bias['x'] = xa_trim / 16384.0  # Convert to g
+            self.accel_bias['y'] = ya_trim / 16384.0
+            self.accel_bias['z'] = za_trim / 16384.0
+            
+            # Read gyroscope factory trim values
+            xg_trim = self.bus.read_byte_data(self.address, MPU9250_XG_OFFSET_H)
+            yg_trim = self.bus.read_byte_data(self.address, MPU9250_YG_OFFSET_H)
+            zg_trim = self.bus.read_byte_data(self.address, MPU9250_ZG_OFFSET_H)
+            
+            # Convert and store gyroscope biases
+            self.gyro_bias['x'] = xg_trim / 131.0  # Convert to degrees/s
+            self.gyro_bias['y'] = yg_trim / 131.0
+            self.gyro_bias['z'] = zg_trim / 131.0
+            
+            print("Factory calibration data loaded:")
+            print(f"Accel bias: {self.accel_bias}")
+            print(f"Gyro bias: {self.gyro_bias}")
+            
+        except Exception as e:
+            print(f"Error reading factory calibration: {e}")
+            raise
+
+    def read_sensor_data(self) -> Tuple[Dict[str, float], Dict[str, float]]:
+        """Read and filter raw accelerometer and gyroscope data."""
+        try:
+            # Read raw data
             accel_data = self.bus.read_i2c_block_data(self.address, MPU9250_ACCEL_XOUT_H, 6)
-            # Read gyroscope data
             gyro_data = self.bus.read_i2c_block_data(self.address, MPU9250_GYRO_XOUT_H, 6)
 
-            # Convert to signed values and scale
+            # Convert raw values
             accel = {
-                'x': self.convert_raw_to_g(accel_data[0], accel_data[1], 16384.0),  # ±2g
+                'x': self.convert_raw_to_g(accel_data[0], accel_data[1], 16384.0),
                 'y': self.convert_raw_to_g(accel_data[2], accel_data[3], 16384.0),
                 'z': self.convert_raw_to_g(accel_data[4], accel_data[5], 16384.0)
             }
-
+            
             gyro = {
-                'x': self.convert_raw_to_dps(gyro_data[0], gyro_data[1], 131.0),  # ±250°/s
+                'x': self.convert_raw_to_dps(gyro_data[0], gyro_data[1], 131.0),
                 'y': self.convert_raw_to_dps(gyro_data[2], gyro_data[3], 131.0),
                 'z': self.convert_raw_to_dps(gyro_data[4], gyro_data[5], 131.0)
             }
 
-            return accel, gyro
+            # Apply EMA filtering
+            filtered_accel = {
+                'x': self.ema_accel['x'].update(accel['x']),
+                'y': self.ema_accel['y'].update(accel['y']),
+                'z': self.ema_accel['z'].update(accel['z'])
+            }
             
+            filtered_gyro = {
+                'x': self.ema_gyro['x'].update(gyro['x']),
+                'y': self.ema_gyro['y'].update(gyro['y']),
+                'z': self.ema_gyro['z'].update(gyro['z'])
+            }
+
+            return filtered_accel, filtered_gyro
+
         except Exception as e:
-            raise RuntimeError(f"Failed to read MPU9250 sensor data: {e}")
+            print(f"Error reading sensor data: {e}")
+            raise
 
     def convert_raw_to_g(self, msb, lsb, scale):
         """Convert raw accelerometer data to g."""
-        value = self.convert_raw_to_int(msb, lsb)
+        value = (msb << 8) | lsb
+        if value > 32767:
+            value -= 65536
         return value / scale
 
     def convert_raw_to_dps(self, msb, lsb, scale):
         """Convert raw gyroscope data to degrees per second."""
-        value = self.convert_raw_to_int(msb, lsb)
-        return value / scale
-
-    def convert_raw_to_int(self, msb, lsb):
-        """Convert raw sensor data to signed integer."""
         value = (msb << 8) | lsb
-        if value >= 0x8000:
-            value -= 0x10000
-        return value
+        if value > 32767:
+            value -= 65536
+        return value / scale
 
     def get_rotation_matrix(self) -> np.ndarray:
         """Calculate rotation matrix from Euler angles."""
