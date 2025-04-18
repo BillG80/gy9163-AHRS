@@ -1,0 +1,81 @@
+/project_root
+    /src
+        /drivers
+            /icm20948
+                icm20948.h
+                icm20948.c
+                icm20948_regs.h
+            /ms5611
+                ms5611.h
+                ms5611.c
+                ms5611_regs.h
+            /bus
+                spi_bus.h
+                spi_bus.c
+                i2c_bus.h
+                i2c_bus.c
+                gpio.h
+                gpio.c
+        
+        /core
+            /ahrs
+                madgwick.h
+                madgwick.c
+                quaternion.h
+                quaternion.c
+            /navigation
+                nav_engine.h
+                nav_engine.c
+                nav_types.h
+            /fusion
+                sensor_fusion.h
+                sensor_fusion.c
+                
+        /platform
+            /rpi_zero2
+                platform.h
+                platform.c
+                timing.h
+                timing.c
+            
+        /communication
+            /ble
+                ble_manager.h
+                ble_manager.c
+                ble_protocol.h
+                ble_data_service.h
+                ble_data_service.c
+            
+        /utils
+            ring_buffer.h
+            ring_buffer.c
+            math_utils.h
+            math_utils.c
+            logging.h
+            logging.c
+            
+    /include
+        system_config.h
+        error_codes.h
+        common_types.h
+        
+    /test
+        /unit
+            test_icm20948.c
+            test_ms5611.c
+            test_madgwick.c
+        /integration
+            test_sensor_fusion.c
+            test_navigation.c
+            
+    /tools
+        calibration.c
+        debug_console.c
+        
+    /docs
+        README.md
+        API.md
+        PROTOCOL.md
+        
+    Makefile
+    CMakeLists.txt
