@@ -9,6 +9,13 @@
                 ms5611.h
                 ms5611.c
                 ms5611_regs.h
+             /ssd1306
+                ssd1306.h
+                ssd1306.c
+                ssd1306_regs.h
+                ssd1306_fonts.h      # Font definitions
+                ssd1306_graphics.h   # Graphics primitives
+                ssd1306_graphics.c   # Line, circle, etc.
             /bus
                 spi_bus.h
                 spi_bus.c
@@ -16,7 +23,15 @@
                 i2c_bus.c
                 gpio.h
                 gpio.c
-        
+
+        /ui
+            /display
+                display_manager.h   # Display state management
+                display_manager.c
+                screens.h           # Screen definitions
+                screens.c           # Different screen layouts
+                ui_types.h          # UI-specific types
+
         /core
             /ahrs
                 madgwick.h
