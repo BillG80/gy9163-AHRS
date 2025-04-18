@@ -1,6 +1,6 @@
-# GY91 & GY63 Sensor System
+# ICM20948 & MS5611 Sensor System
 
-A Python-based sensor system for reading data from GY91 (MPU9250 + BMP280) and GY63 (MS5611) sensors on Raspberry Pi Zero W.
+A C/C++-based sensor system for reading data from ICM20948 and MS5611 sensors on Raspberry Pi Zero 2W.
 
 ## Features
 - Temperature and pressure readings from both BMP280 and MS5611
