@@ -1,0 +1,14 @@
+[Unit]
+Description=Elevator LED Indicator Service
+After=elevator_app.service
+Wants=elevator_app.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/led_service
+Restart=on-failure
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target
